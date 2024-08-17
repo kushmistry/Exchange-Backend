@@ -9,6 +9,14 @@ export interface Order {
   userId: string;
 }
 
+export interface Fill {
+  price: string;
+  qty: number;
+  tradeId: number;
+  otherUserId: string;
+  markerOrderId: string;
+}
+
 export class Orderbook {
   private bids: Order[];
   private asks: Order[];
@@ -29,5 +37,85 @@ export class Orderbook {
     this.baseAsset = baseAsset;
     this.lastTradeId = lastTradeId ?? 0;
     this.currentPrice = currentPrice ?? 0;
+  }
+
+  public ticker() {
+    return `${this.baseAsset}_${this.quoteAsset}`;
+  }
+
+  public addOrder(order: Order): {
+    executedQty: number;
+    fills: Fill[];
+  } {
+    const { side } = order;
+
+    if (side === "buy") {
+      const { fills, executedQty } = this.matchBid(order);
+      order.filled = executedQty;
+      if (executedQty === order.quantity) {
+        return {
+          fills,
+          executedQty,
+        };
+      }
+      this.bids.push(order);
+      return {
+        fills,
+        executedQty,
+      };
+    } else {
+    }
+
+    return {
+      executedQty: 0,
+      fills: [],
+    };
+  }
+
+  matchBid(order: Order): {
+    fills: Fill[];
+    executedQty: number;
+  } {
+    let executedQty = 0;
+    const fills: Fill[] = [];
+
+    this.asks.sort((a, b) => a.price - b.price);
+    const totalAsks = this.asks;
+
+    for (const ask of totalAsks) {
+      if (executedQty === order.quantity) {
+        break;
+      }
+      if (ask.price <= order.price) {
+        const filledQty = Math.min(order.quantity - executedQty, ask.quantity);
+        executedQty += filledQty;
+        ask.filled += filledQty;
+        fills.push({
+          price: ask.price.toString(),
+          qty: filledQty,
+          tradeId: this.lastTradeId++,
+          otherUserId: ask.userId,
+          markerOrderId: order.orderId,
+        });
+      }
+    }
+
+    for (let i = totalAsks.length - 1; i >= 0; i--) {
+      if (totalAsks[i].filled === totalAsks[i].quantity) {
+        totalAsks.splice(i, 1);
+      }
+    }
+
+    return {
+      executedQty,
+      fills,
+    };
+  }
+
+  getAsksBids() {
+    return {
+      asks: this.asks,
+      bids: this.bids,
+    };
   }
 }
