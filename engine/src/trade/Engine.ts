@@ -1,6 +1,7 @@
 import { RedisManager } from "../RedisManager";
+import { TRADE_ADDED } from "../types";
 import { CREATE_ORDER, MessageFromApi } from "../types/fromApi";
-import { Order, Orderbook } from "./Orderbook";
+import { Fill, Order, Orderbook } from "./Orderbook";
 
 export const BASE_CURRENCY = "INR";
 
@@ -71,8 +72,7 @@ export class Engine {
     side: "buy" | "sell",
     userId: string
   ) {
-    console.log({ market, price, quantity, side, userId });
-
+    console.log("In Engine - createOrder: ");
     const orderbook = this.orderbooks.find((o) => o.ticker() === market);
     const baseAsset = market.split("_")[0];
     const quoteAsset = market.split("_")[1];
@@ -108,7 +108,11 @@ export class Engine {
 
     const { executedQty, fills } = orderbook.addOrder(order);
 
+    this.updateBalance(userId, baseAsset, quoteAsset, side, fills);
+    this.createDbTrades(fills, market, userId);
+
     console.log("asks & bids: ", orderbook.getAsksBids());
+    console.log("balances: ", this.balances);
 
     return {
       executedQty,
@@ -125,37 +129,118 @@ export class Engine {
     price: string,
     quantity: string
   ) {
-    console.log({ baseAsset, quoteAsset, side, userId, price, quantity });
     if (side === "buy") {
-      const userQuoteAssetBalance =
-        this.balances.get(userId)?.[quoteAsset]?.available ?? 0;
-      if (userQuoteAssetBalance < Number(quantity) * Number(price)) {
+      if (
+        (this.balances.get(userId)?.[quoteAsset]?.available ?? 0) <
+        Number(quantity) * Number(price)
+      ) {
         throw new Error("Insufficient funds");
       }
 
       //@ts-ignore
       this.balances.get(userId)?.[quoteAsset]?.available =
-        userQuoteAssetBalance - Number(quantity) * Number(price);
+        (this.balances.get(userId)?.[quoteAsset]?.available ?? 0) -
+        Number(quantity) * Number(price);
 
       //@ts-ignore
       this.balances.get(userId)?.[quoteAsset]?.locked =
-        this.balances.get(userId)?.[quoteAsset]?.locked ??
-        0 + Number(quantity) * Number(price);
+        (this.balances.get(userId)?.[quoteAsset]?.locked ?? 0) +
+        Number(quantity) * Number(price);
     } else {
-      const userBaseAssetBalance =
-        this.balances.get(userId)?.[baseAsset]?.available ?? 0;
-      if (userBaseAssetBalance < Number(quantity)) {
+      if (
+        (this.balances.get(userId)?.[baseAsset]?.available ?? 0) <
+        Number(quantity)
+      ) {
         throw new Error("Insufficient funds");
       }
 
       //@ts-ignore
       this.balances.get(userId)?.[baseAsset]?.available =
-        userBaseAssetBalance - Number(quantity);
+        (this.balances.get(userId)?.[baseAsset]?.available ?? 0) -
+        Number(quantity);
 
       //@ts-ignore
       this.balances.get(userId)?.[baseAsset]?.locked =
-        this.balances.get(userId)?.[baseAsset]?.locked ?? 0 + Number(quantity);
+        (this.balances.get(userId)?.[baseAsset]?.locked ?? 0) +
+        Number(quantity);
     }
+  }
+
+  updateBalance(
+    userId: string,
+    baseAsset: string,
+    quoteAsset: string,
+    side: "buy" | "sell",
+    fills: Fill[]
+  ) {
+    if (side === "buy") {
+      fills.forEach((fill) => {
+        // seller user balance updates
+
+        // @ts-ignore
+        this.balances.get(fill.otherUserId)?.[quoteAsset].available =
+          (this.balances.get(fill.otherUserId)?.[quoteAsset]?.available ?? 0) +
+          fill.qty * Number(fill.price);
+
+        // @ts-ignore
+        this.balances.get(fill.otherUserId)?.[baseAsset].locked =
+          (this.balances.get(fill.otherUserId)?.[baseAsset].locked ?? 0) -
+          fill.qty;
+
+        // buyer user balance updates
+
+        // @ts-ignore
+        this.balances.get(userId)?.[quoteAsset]?.locked =
+          (this.balances.get(userId)?.[quoteAsset]?.locked ?? 0) -
+          fill.qty * Number(fill.price);
+
+        // @ts-ignore
+        this.balances.get(userId)?.[baseAsset]?.available =
+          (this.balances.get(userId)?.[baseAsset]?.available ?? 0) + fill.qty;
+      });
+    } else {
+      fills.forEach((fill) => {
+        // seller user balance updates
+
+        // @ts-ignore
+        this.balances.get(userId)?.[baseAsset]?.locked =
+          (this.balances.get(userId)?.[baseAsset].locked ?? 0) - fill.qty;
+
+        //@ts-ignore
+        this.balances.get(userId)?.[quoteAsset].available =
+          (this.balances.get(userId)?.[quoteAsset].available ?? 0) +
+          fill.qty * Number(fill.price);
+
+        // buyer user balance updates
+
+        // @ts-ignore
+        this.balances.get(fill.otherUserId)?.[quoteAsset]?.locked =
+          (this.balances.get(fill.otherUserId)?.[quoteAsset]?.locked ?? 0) -
+          fill.qty * Number(fill.price);
+
+        // @ts-ignore
+        this.balances.get(fill.otherUserId)?.[baseAsset]?.available =
+          (this.balances.get(fill.otherUserId)?.[baseAsset]?.available ?? 0) +
+          fill.qty;
+      });
+    }
+  }
+
+  createDbTrades(fills: Fill[], market: string, userId: string) {
+    fills.forEach((fill) => {
+      RedisManager.getInstance().pushMessage({
+        type: TRADE_ADDED,
+        data: {
+          market: market,
+          id: fill.tradeId.toString(),
+          isBuyerMaker: fill.otherUserId === userId,
+          price: fill.price,
+          quantity: fill.qty.toString(),
+          quoteQuantity: (fill.qty * Number(fill.price)).toString(),
+          timestamp: Date.now(),
+        },
+      });
+    });
   }
 
   setBaseBalances() {

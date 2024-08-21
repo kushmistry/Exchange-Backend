@@ -64,12 +64,20 @@ export class Orderbook {
         executedQty,
       };
     } else {
+      const { executedQty, fills } = this.matchAsk(order);
+      order.filled = executedQty;
+      if (executedQty === order.quantity) {
+        return {
+          fills,
+          executedQty,
+        };
+      }
+      this.asks.push(order);
+      return {
+        fills,
+        executedQty,
+      };
     }
-
-    return {
-      executedQty: 0,
-      fills: [],
-    };
   }
 
   matchBid(order: Order): {
@@ -106,6 +114,45 @@ export class Orderbook {
       }
     }
 
+    return {
+      executedQty,
+      fills,
+    };
+  }
+
+  matchAsk(order: Order): {
+    fills: Fill[];
+    executedQty: number;
+  } {
+    let executedQty = 0;
+    const fills: Fill[] = [];
+
+    this.bids.sort((a, b) => b.price - a.price);
+    const totalBids = this.bids;
+
+    for (const bid of totalBids) {
+      if (executedQty === order.quantity) {
+        break;
+      }
+      if (bid.price >= order.price) {
+        const filledQty = Math.min(order.quantity - executedQty, bid.quantity);
+        executedQty += filledQty;
+        bid.filled += filledQty;
+        fills.push({
+          price: bid.price.toString(),
+          qty: filledQty,
+          tradeId: this.lastTradeId++,
+          otherUserId: bid.userId,
+          markerOrderId: order.orderId,
+        });
+      }
+    }
+
+    for (let i = totalBids.length - 1; i >= 0; i--) {
+      if (totalBids[i].filled === totalBids[i].quantity) {
+        totalBids.splice(i, 1);
+      }
+    }
     return {
       executedQty,
       fills,
