@@ -26,21 +26,31 @@ export class Orderbook {
   private currentPrice: number;
 
   constructor(
+    baseAsset: string,
     bids: Order[],
     asks: Order[],
-    baseAsset: string,
     lastTradeId: number,
     currentPrice: number
   ) {
+    this.baseAsset = baseAsset;
     this.bids = bids;
     this.asks = asks;
-    this.baseAsset = baseAsset;
     this.lastTradeId = lastTradeId ?? 0;
     this.currentPrice = currentPrice ?? 0;
   }
 
   public ticker() {
     return `${this.baseAsset}_${this.quoteAsset}`;
+  }
+
+  public getSnapshot() {
+    return {
+      baseAsset: this.baseAsset,
+      bids: this.bids,
+      asks: this.asks,
+      lastTradeId: this.lastTradeId,
+      currentPrice: this.currentPrice,
+    };
   }
 
   public addOrder(order: Order): {
@@ -159,10 +169,35 @@ export class Orderbook {
     };
   }
 
-  getAsksBids() {
-    return {
-      asks: this.asks,
-      bids: this.bids,
-    };
+  getAsks() {
+    return this.asks;
+  }
+
+  getBids() {
+    return this.bids;
+  }
+
+  getOpenOrders(userId: string): Order[] {
+    const asks = this.asks.filter((x) => x.userId === userId);
+    const bids = this.bids.filter((x) => x.userId === userId);
+    return [...asks, ...bids];
+  }
+
+  cancleBid(order: Order) {
+    const index = this.bids.findIndex((x) => x.orderId === order.orderId);
+    if (index !== -1) {
+      const price = this.bids[index].price;
+      this.bids.splice(index, 1);
+      return price;
+    }
+  }
+
+  cancleAsk(order: Order) {
+    const index = this.asks.findIndex((x) => x.orderId === order.orderId);
+    if (index !== -1) {
+      const price = this.asks[index].price;
+      this.asks.splice(index, 1);
+      return price;
+    }
   }
 }
